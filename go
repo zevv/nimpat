@@ -1,1 +1,1 @@
-nim c nimpat.nim  && ./nimpat 
+nim --debugger:native c nimpat.nim  && ./nimpat 
