@@ -95,95 +95,14 @@ int classend (MatchState *ms, int pi) {
 
 
 int match_class (int c, int cl);
-
-
-int matchbracketclass (MatchState *ms, int c, int pi, int ec)
-{
-  int sig = 1;
-  if (ms->pat[pi+1] == '^') {
-    sig = 0;
-    pi++;  /* skip the '^' */
-  }
-  while (++pi < ec) {
-    if (ms->pat[pi] == L_ESC) {
-      pi++;
-      if (match_class(c, uchar(ms->pat[pi])))
-        return sig;
-    }
-    else if ((ms->pat[pi+1] == '-') && (pi+2 < ec)) {
-      pi+=2;
-      if (uchar(ms->pat[pi-2]) <= c && c <= uchar(ms->pat[pi]))
-        return sig;
-    }
-    else if (ms->pat[pi] == c) return sig;
-  }
-  return !sig;
-}
-
-
+int matchbracketclass (MatchState *ms, int c, int pi, int ec);
 int singlematch (MatchState *ms, int si, int pi, int ep);
-int _singlematch (MatchState *ms, int si, int pi, int ep)
-{
-  if (si >= ms->src_len)
-    return 0;
-  else {
-    int c = uchar(ms->src[si]);
-    switch (ms->pat[pi]) {
-      case '.': return 1;  /* matches any char */
-      case L_ESC: return match_class(c, uchar(ms->pat[pi+1]));
-      case '[': return matchbracketclass(ms, c, pi, ep-1);
-      default:  return (uchar(ms->pat[pi]) == c);
-    }
-  }
-}
+int matchbalance (MatchState *ms, int si, int pi);
+int max_expand (MatchState *ms, int si, int pi, int ep);
+int min_expand (MatchState *ms, int si, int pi, int ep);
 
 
-int matchbalance (MatchState *ms, int si, int pi)
-{
-  if (pi >= ms->pat_len - 1)
-    luaL_error("malformed pattern (missing arguments to '%%b')");
-  if (ms->src[si] != ms->pat[pi]) return -1;
-  else {
-    int b = ms->pat[pi];
-    int e = ms->pat[pi+1];
-    int cont = 1;
-    while (++si < ms->src_len) {
-      if (ms->src[si] == e) {
-        if (--cont == 0) return si+1;
-      }
-      else if (ms->src[si] == b) cont++;
-    }
-  }
-  return -1;  /* string ends out of balance */
-}
 
-
-int max_expand (MatchState *ms, int si, int pi, int ep)
-{
-  ptrdiff_t i = 0;  /* counts maximum expand for item */
-  while (singlematch(ms, si + i, pi, ep))
-    i++;
-  /* keeps trying to match with the maximum repetitions */
-  while (i>=0) {
-    const char *res = match(ms, si+i, ep + 1);
-    if (res) return res - ms->src;
-    i--;  /* else didn't match; reduce 1 repetition to try again */
-  }
-  return -1;
-}
-
-
-const char *min_expand (MatchState *ms, int si, int pi, int ep)
-{
-  for (;;) {
-    const char *res = match(ms, si, ep+1);
-    if (res != -1)
-      return res;
-    else if (singlematch(ms, si, pi, ep))
-      si++;  /* try with one more repetition */
-    else return -1;
-  }
-}
 
 
 const int start_capture (MatchState *ms, int si, int pi, int what)
@@ -403,6 +322,18 @@ int nospecials (const char *p, int l) {
 }
 
 
+void show(MatchState *ms)
+{
+  int i;
+  for(i=0; i<ms->level; i++) {
+    printf("%d: ", i);
+    char *buf = ms->src + ms->capture[i].start;
+    size_t len = ms->capture[i].len;
+    fwrite(buf, len, 1, stdout);
+    printf("\n");
+  }
+}
+
 int str_find_aux (int find, const char *s, const char *p, int init, int plain) 
 {
   int ls = strlen(s);
@@ -442,6 +373,7 @@ int str_find_aux (int find, const char *s, const char *p, int init, int plain)
       lua_assert(ms.matchdepth == MAXCCALLS);
       if ((res=match(&ms, si, pi)) != -1) {
         printf("done\n");
+        show(&ms);
         return;
       }
     } while (si++ < ms.src_len && !anchor);
