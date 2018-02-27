@@ -17,13 +17,13 @@ type
     start: int
 
   MatchState = object
-    matchdepth: cint
-    src: cstring
-    src_len: cint
-    pat: cstring
-    pat_len: cint
-    level: cint
-    capture: array[LUA_MAXCAPTURES, Capture]
+    matchdepth: int
+    src: string
+    src_len: int
+    pat: string
+    pat_len: int
+    level: int
+    caps: seq[ref Capture]
 
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int
@@ -78,7 +78,7 @@ proc match_class*(c: cchar, cl: cchar): bool =
 
 proc check_capture(ms: ref MatchState, cl: char): int =
   let c = ord(cl) - ord('1')
-  if c < 0 or c >= ms.level or ms.capture[c].len == CAP_UNFINISHED:
+  if c < 0 or c >= ms.level or ms.caps[c].len == CAP_UNFINISHED:
     raise newException(ValueError, "invalid capture index $1" % intToStr(c + 1))
   return c
 
@@ -86,16 +86,15 @@ proc check_capture(ms: ref MatchState, cl: char): int =
 proc capture_to_close(ms: ref MatchState): int =
   var level = ms.level - 1
   while level >= 0:
-    if ms.capture[level].len == CAP_UNFINISHED:
+    if ms.caps[level].len == CAP_UNFINISHED:
       return level
     dec(level)
   raise newException(ValueError, "invalid pattern capture")
 
 
-proc matchbracketclass(ms: ref MatchState, c2: int, pi2: int, ec: int): bool =
+proc matchbracketclass(ms: ref MatchState, c: char, pi2: int, ec: int): bool =
   var sig = true
   var pi = pi2
-  let c = cast[cchar](c2)
   if ms.pat[pi+1] == '^':
     sig = false;
     inc(pi) # skip the '^'
@@ -124,8 +123,8 @@ proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
     case ms.pat[pi]
       of '.': return true
       of L_ESC: return match_class(c, ms.pat[pi+1])
-      of '[': return matchbracketclass(ms, cast[cint](c), pi, ep-1)
-      else:  return ms.pat[pi] == c
+      of '[': return matchbracketclass(ms, c, pi, ep-1)
+      else: return ms.pat[pi] == c
 
 
 proc matchbalance (ms: ref MatchState, si2, pi: int): int = 
@@ -150,15 +149,12 @@ proc matchbalance (ms: ref MatchState, si2, pi: int): int =
   return -1
 
 
-
-
-
 proc max_expand (ms: ref MatchState, si, pi, ep: int): int = 
   var i = 0
-  while singlematch(ms, cast[cint](si + i), pi, ep):
+  while singlematch(ms, si + i, pi, ep):
     inc(i)
   while i >= 0: # keeps trying to match with the maximum repetitions
-    var res = match(ms, cast[cint](si+i), cast[cint](ep + 1))
+    var res = match(ms, si+i, ep + 1)
     if res != -1:
       return res
     dec(i)  # else didn't match; reduce 1 repetition to try again
@@ -181,8 +177,10 @@ proc start_capture (ms: ref MatchState, si, pi, what: int): int =
   let level = ms.level
   if level >= LUA_MAXCAPTURES:
     raise newException(ValueError, "too many captures")
-  ms.capture[level].len = cast[cint](what);
-  ms.capture[level].start = cast[cint](si);
+  var cap = new Capture;
+  ms.caps.add(cap)
+  ms.caps[level].len = what;
+  ms.caps[level].start = si;
   ms.level = level+1
   let res = match(ms, si, pi)
   if res == -1: # match failed?
@@ -192,14 +190,14 @@ proc start_capture (ms: ref MatchState, si, pi, what: int): int =
 
 proc end_capture (ms: ref MatchState, si, pi: int): int = 
   let n = capture_to_close(ms)
-  ms.capture[n].len = cast[cint](si - ms.capture[n].start)
+  ms.caps[n].len = si - ms.caps[n].start
   let res = match(ms, si, pi)
   if res == -1:
-    ms.capture[n].len = CAP_UNFINISHED
+    ms.caps[n].len = CAP_UNFINISHED
   return res
 
 
-proc memcmp(s1: cstring, o1: int, s2: cstring, o2: int, len: csize): int =
+proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
   var i = 0
   while i < len:
     if s1[o1+i] < s2[o2+i]:
@@ -209,15 +207,14 @@ proc memcmp(s1: cstring, o1: int, s2: cstring, o2: int, len: csize): int =
   return 0
 
 
-proc match_capture (ms: ref MatchState, si, c: int): int =
+proc match_capture (ms: ref MatchState, si: int, c: int): int =
   let n = check_capture(ms, cast[cchar](c));
-  let len = ms.capture[n].len;
+  let len = ms.caps[n].len;
   if ms.src_len-si >= len and
-      memcmp(ms.src, ms.capture[c].start, ms.src, si, len) == 0:
+      memcmp(ms.src, ms.caps[c].start, ms.src, si, len) == 0:
     return si+len
   else:
     return -1
-
 
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int =
@@ -262,7 +259,6 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
   if ms.matchdepth == 0:
     raise newException(ValueError, "pattern too complex")
 
-
   while true:
   
     var again: bool
@@ -277,8 +273,7 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
           else:
             si = start_capture(ms, si, pi + 1, CAP_UNFINISHED)
 
-        of ')':
-          # end capture
+        of ')': # end capture
           si = end_capture(ms, si, pi + 1)
 
         of '$':
@@ -309,7 +304,7 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
               si = -1
 
             of '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': # capture results (%0-%9)?
-              let rr = match_capture(ms, si, ms.pat[pi + 1])
+              let rr = match_capture(ms, si, cast[int](ms.pat[pi + 1]))
               if rr != -1:
                 inc(pi, 2)
                 again = true
@@ -332,14 +327,14 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
 proc show(ms: ref MatchState) =
   var i = 0
   while i < ms.level:
-    let cap = ms.capture[i]
+    let cap = ms.caps[i]
     let buf = $(ms.src)
     echo "$1: ($2) $3" % 
       [ $i, $cap.start, buf.substr(cap.start, cap.start + cap.len - 1) ]
     inc(i)
 
 
-proc do_match(src: string, pat: string): int =
+proc match(src: string, pat: string): int =
     
   var ms: ref MatchState
   new ms
@@ -353,9 +348,10 @@ proc do_match(src: string, pat: string): int =
   
   ms.matchdepth = MAXCCALLS;
   ms.src = src;
-  ms.src_len = cast[cint](src.len());
+  ms.src_len = src.len();
   ms.pat = pat;
-  ms.pat_len = cast[cint](pat.len());
+  ms.pat_len = pat.len();
+  ms.caps = newSeq[ref Capture]()
 
   while true:
 
@@ -377,6 +373,7 @@ proc do_match(src: string, pat: string): int =
 var s = "apehaar1234nana"
 var p = "ap([^r]+).-([0-9])()(%d*)"
 
-let a = do_match(s, p)
+let a = s.match(p)
 
 # vi: ft=nim et ts=2 sw=2
+
