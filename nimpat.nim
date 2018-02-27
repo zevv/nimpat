@@ -18,10 +18,8 @@ type
   MatchState = object
     matchdepth: cint
     src_init: cstring
-    src_end: cstring
     src_len: cint
     p_init: cstring
-    p_end: cstring
     p_len: cint
     level: cint
     capture: array[LUA_MAXCAPTURES, Capture]

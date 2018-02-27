@@ -14,10 +14,8 @@
 typedef struct MatchState {
   int matchdepth;  /* control for recursive depth (to avoid C stack overflow) */
   const char *src_init;  /* init of source string */
-  const char *src_end;  /* end ('\0') of source string */
   int src_len;
   const char *p_init;
-  const char *p_end;  /* end ('\0') of pattern */
   int p_len;
   int level;  /* total number of captures (finished or unfinished) */
   struct {
@@ -46,7 +44,7 @@ typedef struct {
 
 
 /* recursive function */
-const char *match (MatchState *ms, const char *s, const char *p);
+int match (MatchState *ms, int si, int pi);
 
 
 /* maximum recursion depth for 'match' */
@@ -175,7 +173,7 @@ int max_expand (MatchState *ms, int si, int pi, int ep)
     i++;
   /* keeps trying to match with the maximum repetitions */
   while (i>=0) {
-    const char *res = match(ms, ms->src_init + si+i, ms->p_init + ep + 1);
+    const char *res = match(ms, si+i, ep + 1);
     if (res) return res - ms->src_init;
     i--;  /* else didn't match; reduce 1 repetition to try again */
   }
@@ -186,12 +184,12 @@ int max_expand (MatchState *ms, int si, int pi, int ep)
 const char *min_expand (MatchState *ms, int si, int pi, int ep)
 {
   for (;;) {
-    const char *res = match(ms, ms->src_init+si, ms->p_init+ep+1);
-    if (res != NULL)
+    const char *res = match(ms, si, ep+1);
+    if (res != -1)
       return res;
     else if (singlematch(ms, si, pi, ep))
       si++;  /* try with one more repetition */
-    else return NULL;
+    else return -1;
   }
 }
 
@@ -206,9 +204,9 @@ const int start_capture (MatchState *ms, int si, int pi, int what)
   ms->capture[level].len = what;
   ms->capture[level].start = si;
   ms->level = level+1;
-  if ((res=match(ms, ms->src_init+si, ms->p_init+pi)) == NULL)  /* match failed? */
+  if ((res=match(ms, si, pi)) == -1)  /* match failed? */
     ms->level--;  /* undo capture */
-  return (res == NULL) ? -1 : res - ms->src_init;
+  return res;
 }
 
 
@@ -218,7 +216,7 @@ int end_capture (MatchState *ms, int si, int pi)
   int l = capture_to_close(ms);
   int res;
   ms->capture[l].len = si;
-  if ((res = match(ms, ms->src_init+si, ms->p_init+pi) - ms->src_init) == NULL)  /* match failed? */
+  if ((res = match(ms, si, pi)) == -1)  /* match failed? */
     ms->capture[l].len = CAP_UNFINISHED;  /* undo capture */
   return res;
 }
@@ -235,63 +233,66 @@ int match_capture (MatchState *ms, int si, int l) {
 }
 
 
-const char *match (MatchState *ms, const char *s, const char *p) {
+const int match (MatchState *ms, int si, int pi)
+{
   int rr;
-	printf("match '%s' '%s'\n", s, p);
+  assert(si >= 0);
+  assert(pi >= 0);
+
+	printf("match %d '%s' %d '%s'\n", si, ms->src_init+si, pi, ms->p_init+pi);
   if (ms->matchdepth-- == 0)
     luaL_error("pattern too complex");
   init: /* using goto's to optimize tail recursion */
-  if (p != ms->p_end) {  /* end of pattern? */
-    switch (*p) {
+  if (pi != ms->p_len) {  /* end of pattern? */
+    switch (ms->p_init[pi]) {
       case '(': {  /* start capture */
-        if (*(p + 1) == ')')  /* position capture? */
-          rr = start_capture(ms, s-ms->src_init, p-ms->p_init + 2, CAP_POSITION);
+        if (ms->p_init[pi+1] == ')')  /* position capture? */
+          si = start_capture(ms, si, pi + 2, CAP_POSITION);
         else
-          rr = start_capture(ms, s-ms->src_init, p-ms->p_init + 1, CAP_UNFINISHED);
-        s = (rr == -1) ? NULL : ms->src_init + rr;
+          si = start_capture(ms, si, pi + 1, CAP_UNFINISHED);
         break;
       }
       case ')': {  /* end capture */
-        s = end_capture(ms, s-ms->src_init, p-ms->p_init + 1);
+        si = end_capture(ms, si, pi + 1);
         break;
       }
       case '$': {
-        if ((p + 1) != ms->p_end)  /* is the '$' the last char in pattern? */
+        if ((pi + 1) != ms->p_len)  /* is the '$' the last char in pattern? */
           goto dflt;  /* no; go to default */
-        s = (s == ms->src_end) ? s : NULL;  /* check end of string */
+        si = (si == ms->src_len) ? si : -1;  /* check end of string */
         break;
       }
       case L_ESC: {  /* escaped sequences not in the format class[*+?-]? */
-        switch (*(p + 1)) {
+        switch (ms->p_init[pi+1]) {
           case 'b': {  /* balanced string? */
-            s = ms->src_init + matchbalance(ms, s-ms->src_init, p-ms->p_init + 2);
-            if (s != NULL) {
-              p += 4; goto init;  /* return match(ms, s, p + 4); */
-            }  /* else fail (s == NULL) */
+            si = matchbalance(ms, si, pi + 2);
+            if (si != -1) {
+              pi += 4; goto init;  /* return match(ms, s, p + 4); */
+            }  /* else fail (s == -1) */
             break;
           }
           case 'f': {  /* frontier? */
-            const char *ep; char previous;
-            p += 2;
-            if (*p != '[')
+            int ep; char previous;
+            pi += 2;
+            if (ms->p_init[pi] != '[')
               luaL_error("missing '[' after '%%f' in pattern");
-            ep = ms->p_init + classend(ms, p-ms->p_init);  /* points to what is next */
-            previous = (s == ms->src_init) ? '\0' : *(s - 1);
-            if (!matchbracketclass(ms, uchar(previous), p-ms->p_init, (ep - 1)-ms->p_init) &&
-               matchbracketclass(ms, uchar(*s), p-ms->p_init, (ep - 1)-ms->p_init)) {
-              p = ep; goto init;  /* return match(ms, s, ep); */
+            ep = classend(ms, pi);  /* points to what is next */
+            previous = (si == ms->src_len) ? '\0' : ms->src_init[si-1];
+            if (!matchbracketclass(ms, uchar(previous), pi, ep - 1) &&
+               matchbracketclass(ms, uchar(ms->src_init[si]), pi, ep - 1)) {
+              pi = ep; goto init;  /* return match(ms, s, ep); */
             }
-            s = NULL;  /* match failed */
+            si = -1;  /* match failed */
             break;
           }
           case '0': case '1': case '2': case '3':
           case '4': case '5': case '6': case '7':
           case '8': case '9': {  /* capture results (%0-%9)? */
-            rr = match_capture(ms, s-ms->src_init, uchar(*(p + 1)));
+            rr = match_capture(ms, si, uchar(ms->p_init[pi+1]));
             if (rr != -1) {
-              p += 2; goto init;  /* return match(ms, s, p + 2) */
+              pi += 2; goto init;  /* return match(ms, s, p + 2) */
             } else {
-              s = ms->src_init + rr;
+              si = rr;
             }
             break;
           }
@@ -300,37 +301,37 @@ const char *match (MatchState *ms, const char *s, const char *p) {
         break;
       }
       default: dflt: {  /* pattern class plus optional suffix */
-        const char *ep = ms->p_init + classend(ms, p-ms->p_init);  /* points to optional suffix */
+        int ep = classend(ms, pi);  /* points to optional suffix */
         /* does not match at least once? */
-        if (!singlematch(ms, s - ms->src_init, p - ms->p_init, ep - ms->p_init)) {
-          if (*ep == '*' || *ep == '?' || *ep == '-') {  /* accept empty? */
-            p = ep + 1; goto init;  /* return match(ms, s, ep + 1); */
+        if (!singlematch(ms, si, pi, ep)) {
+          if (ms->p_init[ep] == '*' || ms->p_init[ep] == '?' || ms->p_init[ep] == '-') {  /* accept empty? */
+            pi = ep + 1; goto init;  /* return match(ms, s, ep + 1); */
           }
           else  /* '+' or no suffix */
-            s = NULL;  /* fail */
+            si = -1;  /* fail */
         }
         else {  /* matched once */
-          switch (*ep) {  /* handle optional suffix */
+          switch (ms->p_init[ep]) {  /* handle optional suffix */
             case '?': {  /* optional */
-              const char *res;
-              if ((res = match(ms, s + 1, ep + 1)) != NULL)
-                s = res;
+              int res;
+              if ((res = match(ms, si + 1, ep + 1)) != -1)
+                si = res;
               else {
-                p = ep + 1; goto init;  /* else return match(ms, s, ep + 1); */
+                pi = ep + 1; goto init;  /* else return match(ms, s, ep + 1); */
               }
               break;
             }
             case '+':  /* 1 or more repetitions */
-              s++;  /* 1 match already done */
+              si++;  /* 1 match already done */
               /* FALLTHROUGH */
             case '*':  /* 0 or more repetitions */
-              s = ms->src_init + max_expand(ms, s-ms->src_init, p-ms->p_init, ep-ms->p_init);
+              si = max_expand(ms, si, pi, ep);
               break;
             case '-':  /* 0 or more repetitions (minimum) */
-              s = min_expand(ms, s-ms->src_init, p-ms->p_init, ep-ms->p_init);
+              si = min_expand(ms, si, pi, ep);
               break;
             default:  /* no suffix */
-              s++; p = ep; goto init;  /* return match(ms, s + 1, ep); */
+              si++; pi = ep; goto init;  /* return match(ms, s + 1, ep); */
           }
         }
         break;
@@ -338,7 +339,7 @@ const char *match (MatchState *ms, const char *s, const char *p) {
     }
   }
   ms->matchdepth++;
-  return s;
+  return si;
 }
 
 
@@ -414,7 +415,7 @@ int str_find_aux (int find, const char *s, const char *p, int init, int plain)
 {
   int ls = strlen(s);
   int lp = strlen(p);
-  if (init < 1) init = 1;
+  if (init < 0) init = 0;
   else if (init > (int)ls + 1) {  /* start after string's end? */
     printf("cannot find anything");
     return 1;
@@ -431,32 +432,27 @@ int str_find_aux (int find, const char *s, const char *p, int init, int plain)
   }
   else {
     MatchState ms;
-    const char *s1 = s + init - 1;
+    int si = init;
+    int pi = 0;
     int anchor = (*p == '^');
     if (anchor) {
+      pi++;
       p++; lp--;  /* skip anchor character */
     }
     ms.matchdepth = MAXCCALLS;
     ms.src_init = s;
-    ms.src_end = s + ls;
     ms.src_len = ls;
-    ms.p_end = p + lp;
     ms.p_init = p;
     ms.p_len = lp;
     do {
-      const char *res;
+      int res;
       ms.level = 0;
       lua_assert(ms.matchdepth == MAXCCALLS);
-      if ((res=match(&ms, s1, p)) != NULL) {
-        if (find) {
-          printf("push %d\n", (s1 - s) + 1);  /* start */
-          printf("push %d\n", res - s);   /* end */
-          return push_captures(&ms, NULL, 0) + 2;
-        }
-        else
-          return push_captures(&ms, s1, res);
+      if ((res=match(&ms, si, pi)) != -1) {
+        printf("done\n");
+        return;
       }
-    } while (s1++ < ms.src_end && !anchor);
+    } while (si++ < ms.src_len && !anchor);
   }
   printf("not found\n");
   return 1;
