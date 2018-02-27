@@ -345,7 +345,7 @@ proc show(ms: ref MatchState) =
     let cap = ms.capture[i]
     let buf = $(ms.src)
     echo "$1: ($2) $3" % 
-      [ $i, $cap.len, buf.substr(cap.start, cap.start + cap.len - 1) ]
+      [ $i, $cap.start, buf.substr(cap.start, cap.start + cap.len - 1) ]
     inc(i)
 
 
