@@ -28,9 +28,6 @@ type
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int
 
-proc isXdigit(c: cchar): bool = 
-  return c in HexDigits
-
 
 proc classend (ms: ref MatchState, pi2: int): int =
   var pi = pi2
@@ -70,7 +67,7 @@ proc match_class*(c: cchar, cl: cchar): bool =
     of 's': res = isSpaceAscii(c)
     of 'u': res = isUpperAscii(c)
     of 'w': res = isAlphaNumeric(c)
-    of 'x': res = isXdigit(c)
+    of 'x': res = c in HexDigits
     of 'z': res = (c == '\0')
     else: return (cl == c)
   return if isLowerAscii(cl): res else: not res
