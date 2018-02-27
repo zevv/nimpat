@@ -6,6 +6,7 @@ import strutils
 const 
   LUA_MAXCAPTURES = 32
   CAP_UNFINISHED = -1
+  L_ESC = '%'
 
 
 type
@@ -25,10 +26,10 @@ type
     capture: array[LUA_MAXCAPTURES, Capture]
 
 
-proc isXdigit(c: cchar) : bool = 
+proc isXdigit(c: cchar): bool = 
   return c in HexDigits
 
-proc match_class*(c: cchar, cl: cchar) : bool {.exportc.} =
+proc match_class*(c: cchar, cl: cchar): bool {.exportc.} =
   var res: bool
   case toLowerAscii(cl)
     of 'a': res = isAlphaAscii(c)
@@ -46,14 +47,14 @@ proc match_class*(c: cchar, cl: cchar) : bool {.exportc.} =
   return if isLowerAscii(cl): res else: not res
 
 
-proc check_capture(ms: ptr MatchState, cl: char) : int {.exportc} =
+proc check_capture(ms: ptr MatchState, cl: char): int {.exportc} =
   let c = ord(cl) - ord('1')
   if c < 0 or c >= ms.level or ms.capture[c].len == CAP_UNFINISHED:
     raise newException(ValueError, "invalid capture index $1" % intToStr(c + 1))
   return c
 
 
-proc capture_to_close(ms: ptr MatchState) : int {.exportc.} =
+proc capture_to_close(ms: ptr MatchState): int {.exportc.} =
   var level = ms.level - 1
   while level >= 0:
     if ms.capture[level].len == CAP_UNFINISHED:
@@ -61,6 +62,17 @@ proc capture_to_close(ms: ptr MatchState) : int {.exportc.} =
     dec(level)
   raise newException(ValueError, "invalid pattern capture")
 
+
+proc singlematch (MatchState *ms, int si, int pi, int ep): int {.exportc.}
+  if si >= ms->src_len:
+    return 0;
+  else:
+    let c = ms->src[si];
+    case ms->pat[pi]
+      of '.': return 1;  /* matches any char */
+      of L_ESC: return match_class(c, uchar(ms->pat[pi+1]));
+      of '[': return matchbracketclass(ms, c, pi, ep-1);
+      else:  return (uchar(ms->pat[pi]) == c);
 
 
 proc str_find_aux (find: int, s: cstring, p: cstring, init: int, plain: int): int {. importc: "str_find_aux" .}
