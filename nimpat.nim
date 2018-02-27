@@ -5,20 +5,21 @@
 
 import strutils
 
-{.compile: "lstrlib.c".}
+#{.compile: "lstrlib.c".}
 
 const 
   LUA_MAXCAPTURES = 32
   CAP_UNFINISHED = -1
+  CAP_POSITION = -2
   L_ESC = '%'
+  MAXCCALLS = 200
 
 
 type
 
   Capture = object
-    init: cstring
-    len: cint
-    start: cint
+    len: int
+    start: int
 
   MatchState = object
     matchdepth: cint
@@ -30,10 +31,39 @@ type
     capture: array[LUA_MAXCAPTURES, Capture]
 
 
+proc match(ms: ref MatchState; si2: int; pi2: int): int
+
 proc isXdigit(c: cchar): bool = 
   return c in HexDigits
 
-proc match_class*(c: cchar, cl: cchar): bool {.exportc.} =
+
+proc classend (ms: ref MatchState, pi2: int): int =
+  var pi = pi2
+  let c = ms.pat[pi]
+  inc(pi)
+  case c
+    of L_ESC:
+      if pi == ms.pat_len:
+        raise newException(ValueError, "malformed pattern (ends with '%%')");
+      return pi+1
+    of '[':
+      if ms.pat[pi] == '^':
+        inc(pi)
+      while true:
+        if pi == ms.pat_len:
+          raise newException(ValueError, "malformed pattern (missing ']')")
+        let c = ms.pat[pi]
+        inc(pi)
+        if c == L_ESC and pi < ms.pat_len:
+          inc(pi)  # skip escapes (e.g. '%]')
+        if ms.pat[pi] == ']':
+          break
+      return pi+1;
+    else:
+      return pi
+
+
+proc match_class*(c: cchar, cl: cchar): bool =
   var res: bool
   case toLowerAscii(cl)
     of 'a': res = isAlphaAscii(c)
@@ -51,14 +81,14 @@ proc match_class*(c: cchar, cl: cchar): bool {.exportc.} =
   return if isLowerAscii(cl): res else: not res
 
 
-proc check_capture(ms: ptr MatchState, cl: char): int {.exportc} =
+proc check_capture(ms: ref MatchState, cl: char): int =
   let c = ord(cl) - ord('1')
   if c < 0 or c >= ms.level or ms.capture[c].len == CAP_UNFINISHED:
     raise newException(ValueError, "invalid capture index $1" % intToStr(c + 1))
   return c
 
 
-proc capture_to_close(ms: ptr MatchState): int {.exportc.} =
+proc capture_to_close(ms: ref MatchState): int =
   var level = ms.level - 1
   while level >= 0:
     if ms.capture[level].len == CAP_UNFINISHED:
@@ -67,7 +97,7 @@ proc capture_to_close(ms: ptr MatchState): int {.exportc.} =
   raise newException(ValueError, "invalid pattern capture")
 
 
-proc matchbracketclass(ms: MatchState, c2: cint, pi2: cint, ec: cint): bool {.exportc.} =
+proc matchbracketclass(ms: ref MatchState, c2: int, pi2: int, ec: int): bool =
   var sig = true
   var pi = pi2
   let c = cast[cchar](c2)
@@ -91,7 +121,7 @@ proc matchbracketclass(ms: MatchState, c2: cint, pi2: cint, ec: cint): bool {.ex
   return not sig;
 
 
-proc singlematch (ms: MatchState, si, pi, ep: cint): bool {.exportc.} =
+proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
   if si >= ms.src_len:
     return false
   else:
@@ -103,7 +133,7 @@ proc singlematch (ms: MatchState, si, pi, ep: cint): bool {.exportc.} =
       else:  return ms.pat[pi] == c
 
 
-proc matchbalance (ms: MatchState, si2, pi: cint): int {.exportc.} = 
+proc matchbalance (ms: ref MatchState, si2, pi: int): int = 
   var si = si2
   if pi >= ms.pat_len - 1:
     raise newException(ValueError, "malformed pattern (missing arguments to '%%b')")
@@ -125,10 +155,10 @@ proc matchbalance (ms: MatchState, si2, pi: cint): int {.exportc.} =
   return -1
 
 
-proc match*(ms: MatchState, si, pi: cint): cint {.importc: "match".}
 
 
-proc max_expand (ms: MatchState, si, pi, ep: cint): int {.exportc.} = 
+
+proc max_expand (ms: ref MatchState, si, pi, ep: int): int = 
   var i = 0
   while singlematch(ms, cast[cint](si + i), pi, ep):
     inc(i)
@@ -140,7 +170,7 @@ proc max_expand (ms: MatchState, si, pi, ep: cint): int {.exportc.} =
   return -1
 
 
-proc min_expand (ms: MatchState, si2, pi, ep: cint): int {.exportc.} =
+proc min_expand (ms: ref MatchState, si2, pi, ep: int): int =
   var si = si2
   while true:
     let res = match(ms, si, ep+1)
@@ -152,20 +182,211 @@ proc min_expand (ms: MatchState, si2, pi, ep: cint): int {.exportc.} =
       return -1
 
 
-proc str_find_aux (find: int, s: cstring, p: cstring, init: int, plain: int): int {. importc: "str_find_aux" .}
+proc start_capture (ms: ref MatchState, si, pi, what: int): int =
+  let level = ms.level
+  if level >= LUA_MAXCAPTURES:
+    raise newException(ValueError, "too many captures")
+  ms.capture[level].len = cast[cint](what);
+  ms.capture[level].start = cast[cint](si);
+  ms.level = level+1
+  let res = match(ms, si, pi)
+  if res == -1: # match failed?
+    dec(ms.level) # undo capture
+  return res
+
+
+proc end_capture (ms: ref MatchState, si, pi: int): int = 
+  let n = capture_to_close(ms)
+  ms.capture[n].len = cast[cint](si - ms.capture[n].start)
+  let res = match(ms, si, pi)
+  if res == -1:
+    ms.capture[n].len = CAP_UNFINISHED
+  return res
+
+
+proc memcmp(s1: cstring, o1: int, s2: cstring, o2: int, len: csize): int =
+  var i = 0
+  while i < len:
+    if s1[o1+i] < s2[o2+i]:
+      return -1
+    elif s1[o1+i] > s2[o2+i]:
+      return 1
+  return 0
+
+
+proc match_capture (ms: ref MatchState, si, c: int): int =
+  let n = check_capture(ms, cast[cchar](c));
+  let len = ms.capture[n].len;
+  if ms.src_len-si >= len and
+      memcmp(ms.src, ms.capture[c].start, ms.src, si, len) == 0:
+    return si+len
+  else:
+    return -1
+
+
+proc uchar(n: int): int =
+  return n
+
+proc uchar(n: char): int =
+  return cast[int](n)
+
+proc match(ms: ref MatchState; si2: int; pi2: int): int =
+  var si: int = si2
+  var pi: int = pi2
+  assert si >= 0
+  assert pi >= 0
+
+  proc do_default(): bool =
+    let ep = classend(ms, pi) # points to optional suffix
+    # does not match at least once?
+    if not singlematch(ms, si, pi, ep):
+      if ms.pat[ep] == '*' or ms.pat[ep] == '?' or ms.pat[ep] == '-': #  accept empty?
+        pi = ep + 1
+        return true
+      else: #  '+' or no suffix
+        si = -1 #  fail
+    else: # matched once
+      case ms.pat[ep] # handle optional suffix
+      of '?': # optional
+        let res = match(ms, si + 1, ep + 1)
+        if res != -1:
+          si = res
+        else:
+          pi = ep + 1
+          return true
+      of '+': # 1 or more repetitions
+        inc(si) # 1 match already done
+        si = max_expand(ms, si, pi, ep)
+      of '*': # 0 or more repetitions
+        si = max_expand(ms, si, pi, ep)
+      of '-': # 0 or more repetitions (minimum)
+        si = min_expand(ms, si, pi, ep)
+      else: # no suffix
+        inc(si)
+        pi = ep
+        return true
+    return false
+
+
+  dec(ms.matchdepth)
+  if ms.matchdepth == 0:
+    raise newException(ValueError, "pattern too complex")
+
+
+  while true:
+  
+    var again: bool
+
+    if pi != ms.pat_len: # end of pattern?
+
+      case ms.pat[pi]
+
+        of '(': # start capture
+          if ms.pat[pi + 1] == ')':
+            si = start_capture(ms, si, pi + 2, CAP_POSITION)
+          else:
+            si = start_capture(ms, si, pi + 1, CAP_UNFINISHED)
+
+        of ')':
+          # end capture
+          si = end_capture(ms, si, pi + 1)
+
+        of '$':
+          if (pi + 1) != ms.pat_len: # is the '$' the last char in pattern?
+            again = do_default()
+          si = if (si == ms.src_len): si else: -1 # check end of string
+
+        of L_ESC: # escaped sequences not in the format class[*+?-]?
+
+          case ms.pat[pi + 1]
+
+            of 'b': # balanced string?
+              si = matchbalance(ms, si, pi + 2)
+              if si != -1:
+                inc(pi, 4)
+                again = true
+
+            of 'f': # frontier?
+              inc(pi, 2)
+              if ms.pat[pi] != '[':
+                raise newException(ValueError, "missing \'[\' after \'%%f\' in pattern")
+              let ep = classend(ms, pi) # points to what is next
+              let previous = if (si == ms.src_len): '\0' else: ms.src[si - 1]
+              if not matchbracketclass(ms, uchar(previous), pi, ep - 1) and
+                  matchbracketclass(ms, uchar(ms.src[si]), pi, ep - 1):
+                pi = ep
+                again = true
+              si = -1
+
+            of '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': # capture results (%0-%9)?
+              let rr = match_capture(ms, si, uchar(ms.pat[pi + 1]))
+              if rr != -1:
+                inc(pi, 2)
+                again = true
+              else:
+                si = rr
+
+            else:
+              again = do_default()
+
+        else:
+
+          again = do_default()
+
+    if not again: break
+
+  inc(ms.matchdepth)
+  return si
+
+
+proc show(ms: ref MatchState) =
+  var i = 0
+  while i < ms.level:
+    let cap = ms.capture[i]
+    let buf = $(ms.src)
+    echo "$1: ($2) $3" % 
+      [ $i, $cap.len, buf.substr(cap.start, cap.start + cap.len - 1) ]
+    inc(i)
+
+
+proc do_match(src: string, pat: string): int =
+    
+  var ms: ref MatchState
+  new ms
+  var si = 0
+  var pi = 0
+
+  let anchor = pat[0] == '^'
+ 
+  if anchor:
+    inc(pi)
+  
+  ms.matchdepth = MAXCCALLS;
+  ms.src = src;
+  ms.src_len = cast[cint](src.len());
+  ms.pat = pat;
+  ms.pat_len = cast[cint](pat.len());
+
+  while true:
+
+    ms.level = 0
+    assert ms.matchdepth == MAXCCALLS
+    
+    let res = match(ms, si, pi)
+    if res != -1:
+      echo  "done"
+      show(ms)
+      return
+    
+    if not (si < ms.src_len and not anchor):
+      break
+
+    inc(si)
 
 
 var s = "apehaar1234nana"
-var p = "ap([^r].-).-([0-9])()(%d*)"
+var p = "ap([^r]+).-([0-9])()(%d*)"
 
-p = "(%d+)"
-let a = str_find_aux(0, s, p, 0, 0)
-
-echo a
-    
-var ms: MatchState;
-var s1 = s;
-ms.matchdepth = 32;
-ms.src = s;
+let a = do_match(s, p)
 
 # vi: ft=nim et ts=2 sw=2
