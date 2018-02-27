@@ -1,11 +1,6 @@
 
-#
-# TODO: uchar()
-#
 
 import strutils
-
-#{.compile: "lstrlib.c".}
 
 const 
   LUA_MAXCAPTURES = 32
@@ -224,11 +219,6 @@ proc match_capture (ms: ref MatchState, si, c: int): int =
     return -1
 
 
-proc uchar(n: int): int =
-  return n
-
-proc uchar(n: char): int =
-  return cast[int](n)
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int =
   var si: int = si2
@@ -312,14 +302,14 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
                 raise newException(ValueError, "missing \'[\' after \'%%f\' in pattern")
               let ep = classend(ms, pi) # points to what is next
               let previous = if (si == ms.src_len): '\0' else: ms.src[si - 1]
-              if not matchbracketclass(ms, uchar(previous), pi, ep - 1) and
-                  matchbracketclass(ms, uchar(ms.src[si]), pi, ep - 1):
+              if not matchbracketclass(ms, previous, pi, ep - 1) and
+                  matchbracketclass(ms, ms.src[si], pi, ep - 1):
                 pi = ep
                 again = true
               si = -1
 
             of '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': # capture results (%0-%9)?
-              let rr = match_capture(ms, si, uchar(ms.pat[pi + 1]))
+              let rr = match_capture(ms, si, ms.pat[pi + 1])
               if rr != -1:
                 inc(pi, 2)
                 again = true
