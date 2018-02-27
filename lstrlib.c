@@ -196,7 +196,7 @@ const char *min_expand (MatchState *ms, int si, int pi, int ep)
 }
 
 
-const char *start_capture (MatchState *ms, int si, int pi, int what)
+const int start_capture (MatchState *ms, int si, int pi, int what)
 {
   const char *res;
   printf("  start '%s' '%s'\n", ms->src_init+si, ms->p_init+pi);
@@ -208,34 +208,35 @@ const char *start_capture (MatchState *ms, int si, int pi, int what)
   ms->level = level+1;
   if ((res=match(ms, ms->src_init+si, ms->p_init+pi)) == NULL)  /* match failed? */
     ms->level--;  /* undo capture */
-  return res;
+  return (res == NULL) ? -1 : res - ms->src_init;
 }
 
 
-const char *end_capture (MatchState *ms, int si, int pi)
+int end_capture (MatchState *ms, int si, int pi)
 {
   printf("  end '%s' '%s'\n", ms->src_init+si, ms->p_init+pi);
   int l = capture_to_close(ms);
-  const char *res;
+  int res;
   ms->capture[l].len = si;
-  if ((res = match(ms, ms->src_init+si, ms->p_init+pi)) == NULL)  /* match failed? */
+  if ((res = match(ms, ms->src_init+si, ms->p_init+pi) - ms->src_init) == NULL)  /* match failed? */
     ms->capture[l].len = CAP_UNFINISHED;  /* undo capture */
   return res;
 }
 
 
-const char *match_capture (MatchState *ms, const char *s, int l) {
+int match_capture (MatchState *ms, int si, int l) {
   int len;
   l = check_capture(ms, l);
   len = ms->capture[l].len;
-  if ((int)(ms->src_end-s) >= len &&
-      memcmp(ms->capture[l].init, s, len) == 0)
-    return s+len;
-  else return NULL;
+  if ((int)(ms->src_len-si) >= len &&
+      memcmp(ms->capture[l].init, ms->src_init[si], len) == 0)
+    return si+len;
+  else return -1;
 }
 
 
 const char *match (MatchState *ms, const char *s, const char *p) {
+  int rr;
 	printf("match '%s' '%s'\n", s, p);
   if (ms->matchdepth-- == 0)
     luaL_error("pattern too complex");
@@ -244,9 +245,10 @@ const char *match (MatchState *ms, const char *s, const char *p) {
     switch (*p) {
       case '(': {  /* start capture */
         if (*(p + 1) == ')')  /* position capture? */
-          s = start_capture(ms, s-ms->src_init, p-ms->p_init + 2, CAP_POSITION);
+          rr = start_capture(ms, s-ms->src_init, p-ms->p_init + 2, CAP_POSITION);
         else
-          s = start_capture(ms, s-ms->src_init, p-ms->p_init + 1, CAP_UNFINISHED);
+          rr = start_capture(ms, s-ms->src_init, p-ms->p_init + 1, CAP_UNFINISHED);
+        s = (rr == -1) ? NULL : ms->src_init + rr;
         break;
       }
       case ')': {  /* end capture */
@@ -285,9 +287,11 @@ const char *match (MatchState *ms, const char *s, const char *p) {
           case '0': case '1': case '2': case '3':
           case '4': case '5': case '6': case '7':
           case '8': case '9': {  /* capture results (%0-%9)? */
-            s = match_capture(ms, s, uchar(*(p + 1)));
-            if (s != NULL) {
+            rr = match_capture(ms, s-ms->src_init, uchar(*(p + 1)));
+            if (rr != -1) {
               p += 2; goto init;  /* return match(ms, s, p + 2) */
+            } else {
+              s = ms->src_init + rr;
             }
             break;
           }
