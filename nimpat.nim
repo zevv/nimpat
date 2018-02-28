@@ -1,4 +1,10 @@
 
+#
+# This is basically a straight port of the Lua pattern matching code from Lua
+# 5.3.4 lstrlib.c. Pointer arithmatic has been refactored to create safe Nim
+# code, and some code was changed to avoid goto's used in the original 
+#
+
 import strutils
 
 const 
@@ -6,7 +12,6 @@ const
   CAP_POSITION = -2
   L_ESC = '%'
   MAXCCALLS = 200
-
 
 type
 
@@ -22,7 +27,6 @@ type
     pat_len: int
     level: int
     captures: seq[ref Capture]
-
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int
 
@@ -316,17 +320,15 @@ proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
     inc(i)
   return cs
 
-proc match_aux(src: string, pat: string): seq[string] =
+proc match(src: string, pat: string): seq[string] =
     
   var ms: ref MatchState
   new ms
   var si = 0
   var pi = 0
 
-  let anchor = pat[0] == '^'
- 
-  if anchor:
-    inc(pi)
+  let anchor = (pat[0] == '^')
+  if anchor: inc(pi)
   
   ms.matchdepth = MAXCCALLS;
   ms.src = src;
@@ -336,84 +338,88 @@ proc match_aux(src: string, pat: string): seq[string] =
   ms.captures = newSeq[ref Capture]()
 
   while true:
-
     ms.level = 0
     assert ms.matchdepth == MAXCCALLS
-    
     let res = match(ms, si, pi)
     if res != -1:
       return get_captures(ms, si, res)
-    
     if not (si < ms.src_len and not anchor):
       break
-
     inc(si)
-
-
-proc match(src: string, pat: string): string =
-  let captures = match_aux(src, pat)
-  if len(captures) > 0:
-    return captures[0]
 
 
 
 proc unit_test() =
 
-  proc test(src, pat, res: string) = 
-    if src.match(pat) != res:
-      echo "fail ('$1', '$2') != '$3' " % [src, pat, res]
+  proc test(src, pat: string, exp: seq[string]) = 
+    let res = src.match(pat)
+    var ok = true
+    if res.len == exp.len:
+      var i = 0
+      while i < exp.len:
+        if res[i] != exp[i]:
+          ok = false
+        inc(i)
+    else:
+      ok = false
+    if not ok:
+      echo "fail ('$1', '$2') != '$3' " % [src, pat, repr(res)]
 
-  test("aaab", ".*b", "aaab")
-  test("aaa", ".*a", "aaa")
-  test("b", ".*b", "b")
-  test("aaab", ".+b", "aaab")
-  test("aaa", ".+a", "aaa")
+  test("123456", "(%d%d)(%d%d)", @["12", "34"])
+  test("123456", ".(%d%d)(%d%d)", @["23", "45"])
+  test("123456", "(%d%d)(%d%d)$", @["34", "56"])
+  test("abcd", "((..)(..))", @["abcd", "ab", "cd"])
+  test("aaab", ".*b", @["aaab"])
+  test("aaa", ".*a", @["aaa"])
+  test("b", ".*b", @["b"])
+  test("aaab", ".+b", @["aaab"])
+  test("aaa", ".+a", @["aaa"])
   test("b", ".+b",  nil)
-  test("aaab", ".?b", "ab")
-  test("aaa", ".?a", "aa")
-  test("b", ".?b", "b")
-  test("oo", "(.)%1", "o")
-  test("==========", "^([=]*)=$", "=========")
+  test("aaab", ".?b", @["ab"])
+  test("aaa", ".?a", @["aa"])
+  test("b", ".?b", @["b"])
+  test("oo", "(.)%1", @["o"])
+  test("==========", "^([=]*)=$", @["========="])
   test("==========", "^([=]*)=%1$", nil)
-  test("alo xyzK", "(%w+)K", "xyz")
-  test("254 K", "(%d*)K", "")
-  test("alo ", "(%w*)$", "")
+  test("alo xyzK", "(%w+)K", @["xyz"])
+  test("254 K", "(%d*)K", @[""])
+  test("alo ", "(%w*)$", @[""])
   test("alo ", "(%w+)$", nil)
-  test("aloALO", "%l*", "alo")
-  test("aLo_ALO", "%a*", "aLo")
-  test("aaab", "a*", "aaa");
-  test("aaa", "^.*$", "aaa");
-  test("aaa", "b*", "");
-  test("aaa", "ab*a", "aa")
-  test("aba", "ab*a", "aba")
-  test("aaab", "a+", "aaa")
-  test("aaa", "^.+$", "aaa")
+  test("aloALO", "%l*", @["alo"])
+  test("aLo_ALO", "%a*", @["aLo"])
+  test("aaab", "a*", @["aaa"])
+  test("aaa", "^.*$", @["aaa"])
+  test("aaa", "b*", @[""])
+  test("aaa", "ab*a", @["aa"])
+  test("aba", "ab*a", @["aba"])
+  test("aaab", "a+", @["aaa"])
+  test("aaa", "^.+$", @["aaa"])
   test("aaa", "b+", nil)
   test("aaa", "ab+a", nil)
-  test("aba", "ab+a", "aba")
-  test("a$a", ".$", "a")
-  test("a$a", ".%$", "a$")
-  test("a$a", ".$.", "a$a")
+  test("aba", "ab+a", @["aba"])
+  test("a$a", ".$", @["a"])
+  test("a$a", ".%$", @["a$"])
+  test("a$a", ".$.", @["a$a"])
   test("a$a", "$$", nil)
   test("a$b", "a$", nil)
-  test("a$a", "$", "")
-  test("", "b*", "")
+  test("a$a", "$", @[""])
+  test("", "b*", @[""])
   test("aaa", "bb*", nil)
-  test("aaab", "a-", "")
-  test("aaa", "^.-$", "aaa")
-  test("aabaaabaaabaaaba", "b.*b", "baaabaaabaaab")
-  test("aabaaabaaabaaaba", "b.-b", "baaab")
-  test("alo xo", ".o$", "xo")
-  test(" \n isto é assim", "%S%S*", "isto")
-  test(" \n isto é assim", "%S*$", "assim")
-  test(" \n isto é assim", "[a-z]*$", "assim")
-  test("um caracter ? extra", "[^%sa-z]", "?")
-  test("", "a?", "")
-  test("á", "á?", "á")
-  test("ábl", "á?b?l?", "ábl")
-  test("aa", "^aa?a?a", "aa")
-  test("0alo alo", "%x*", "0a")
-  echo "All ok"
+  test("aaab", "a-", @[""])
+  test("aaa", "^.-$", @["aaa"])
+  test("aabaaabaaabaaaba", "b.*b", @["baaabaaabaaab"])
+  test("aabaaabaaabaaaba", "b.-b", @["baaab"])
+  test("alo xo", ".o$", @["xo"])
+  test(" \n isto é assim", "%S%S*", @["isto"])
+  test(" \n isto é assim", "%S*$", @["assim"])
+  test(" \n isto é assim", "[a-z]*$", @["assim"])
+  test("um caracter ? extra", "[^%sa-z]", @["?"])
+  test("", "a?", @[""])
+  test("á", "á?", @["á"])
+  test("ábl", "á?b?l?", @["ábl"])
+  test("aa", "^aa?a?a", @["aa"])
+  test("0alo alo", "%x*", @["0a"])
+  echo "Done"
 
 
 unit_test()
