@@ -2,7 +2,6 @@
 import strutils
 
 const 
-  LUA_MAXCAPTURES = 32
   CAP_UNFINISHED = -1
   CAP_POSITION = -2
   L_ESC = '%'
@@ -15,8 +14,6 @@ type
     len: int
     start: int
 
-  Captures = seq[ref Capture]
-
   MatchState = object
     matchdepth: int
     src: string
@@ -24,16 +21,10 @@ type
     pat: string
     pat_len: int
     level: int
-    captures: Captures
-
-
-proc debug(s: string) =
-  if false:
-    echo s
+    captures: seq[ref Capture]
 
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int
-
 
 proc classend (ms: ref MatchState, pi2: int): int =
   var pi = pi2
@@ -42,7 +33,7 @@ proc classend (ms: ref MatchState, pi2: int): int =
   case c
     of L_ESC:
       if pi == ms.pat_len:
-        raise newException(ValueError, "malformed pattern (ends with '%%')");
+        raise newException(ValueError, "malformed pattern (ends with '%')");
       return pi+1
     of '[':
       if ms.pat[pi] == '^':
@@ -59,7 +50,6 @@ proc classend (ms: ref MatchState, pi2: int): int =
       return pi+1;
     else:
       return pi
-
 
 proc match_class*(c: cchar, cl: cchar): bool =
   var res: bool
@@ -78,13 +68,11 @@ proc match_class*(c: cchar, cl: cchar): bool =
     else: return (cl == c)
   return if isLowerAscii(cl): res else: not res
 
-
 proc check_capture(ms: ref MatchState, cl: char): int =
   let c = parseInt($cl) - 1
   if c < 0 or c >= ms.level or ms.captures[c].len == CAP_UNFINISHED:
     raise newException(ValueError, "invalid capture index $1" % intToStr(c + 1))
   return c
-
 
 proc capture_to_close(ms: ref MatchState): int =
   var level = ms.level - 1
@@ -93,7 +81,6 @@ proc capture_to_close(ms: ref MatchState): int =
       return level
     dec(level)
   raise newException(ValueError, "invalid pattern capture")
-
 
 proc matchbracketclass(ms: ref MatchState, c: char, pi2: int, ec: int): bool =
   var sig = true
@@ -117,7 +104,6 @@ proc matchbracketclass(ms: ref MatchState, c: char, pi2: int, ec: int): bool =
   
   return not sig;
 
-
 proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
   if si >= ms.src_len:
     return false
@@ -128,7 +114,6 @@ proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
       of L_ESC: return match_class(c, ms.pat[pi+1])
       of '[': return matchbracketclass(ms, c, pi, ep-1)
       else: return ms.pat[pi] == c
-
 
 proc matchbalance (ms: ref MatchState, si2, pi: int): int = 
   var si = si2
@@ -151,7 +136,6 @@ proc matchbalance (ms: ref MatchState, si2, pi: int): int =
       inc(si)
   return -1
 
-
 proc max_expand (ms: ref MatchState, si, pi, ep: int): int = 
   var i = 0
   while singlematch(ms, si + i, pi, ep):
@@ -162,7 +146,6 @@ proc max_expand (ms: ref MatchState, si, pi, ep: int): int =
       return res
     dec(i)  # else didn't match; reduce 1 repetition to try again
   return -1
-
 
 proc min_expand (ms: ref MatchState, si2, pi, ep: int): int =
   var si = si2
@@ -175,12 +158,8 @@ proc min_expand (ms: ref MatchState, si2, pi, ep: int): int =
     else:
       return -1
 
-
 proc start_capture (ms: ref MatchState, si, pi, what: int): int =
-  debug "  start $1" % $si
   let level = ms.level
-  if level >= LUA_MAXCAPTURES:
-    raise newException(ValueError, "too many captures")
   var cap = new Capture;
   ms.captures.add(cap)
   ms.captures[level].len = what;
@@ -191,7 +170,6 @@ proc start_capture (ms: ref MatchState, si, pi, what: int): int =
     dec(ms.level) # undo capture
   return res
 
-
 proc end_capture (ms: ref MatchState, si, pi: int): int = 
   let n = capture_to_close(ms)
   var cap = ms.captures[n]
@@ -200,7 +178,6 @@ proc end_capture (ms: ref MatchState, si, pi: int): int =
   if res == -1:
     ms.captures[n].len = CAP_UNFINISHED
   return res
-
 
 proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
   var i = 0
@@ -212,7 +189,6 @@ proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
     inc(i)
   return 0
 
-
 proc match_capture (ms: ref MatchState, si: int, c: int): int =
   let n = check_capture(ms, cast[cchar](c));
   let len = ms.captures[n].len;
@@ -221,7 +197,6 @@ proc match_capture (ms: ref MatchState, si: int, c: int): int =
     return si+len
   else:
     return -1
-
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int =
   var si: int = si2
@@ -239,12 +214,9 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
       else: #  '+' or no suffix
         si = -1 #  fail
     else: # matched once
-      debug "  def " & $cast[int](ms.pat[ep])
       case ms.pat[ep] # handle optional suffix
       of '?': # optional
-        debug "  question"
         let res = match(ms, si + 1, ep + 1)
-        debug "  s2 " & $res
         if res != -1:
           si = res
         else:
@@ -268,17 +240,11 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
     raise newException(ValueError, "pattern too complex")
 
   while true:
-  
-    debug "match $1 '$2' '$3'" % [ $si, ms.src.substr(si), ms.pat.substr(pi)]
-
     var again: bool
 
     if pi != ms.pat_len: # end of pattern?
 
-      debug "pat " & $ms.pat[pi]
-
       case ms.pat[pi]
-
       of '(': # start capture
         if ms.pat[pi + 1] == ')':
           si = start_capture(ms, si, pi + 2, CAP_POSITION)
@@ -287,25 +253,18 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
 
       of ')': # end capture
         si = end_capture(ms, si, pi + 1)
-
       of '$':
         if (pi + 1) != ms.pat_len: # is the '$' the last char in pattern?
           again = do_default()
         else:
           si = if (si == ms.src_len): si else: -1 # check end of string
-
       of L_ESC: # escaped sequences not in the format class[*+?-]?
-
-        debug "pat2 " & $ms.pat[pi+1]
-
         case ms.pat[pi + 1]
-
         of 'b': # balanced string?
           si = matchbalance(ms, si, pi + 2)
           if si != -1:
             inc(pi, 4)
             again = true
-
         of 'f': # frontier?
           inc(pi, 2)
           if ms.pat[pi] != '[':
@@ -317,32 +276,24 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
             pi = ep
             again = true
           si = -1
-
         of Digits: # capture results (%0-%9)?
           si = match_capture(ms, si, cast[int](ms.pat[pi + 1]))
-          debug "  digit $1" % $si
           if si != -1:
             inc(pi, 2)
             again = true
-
         else:
           again = do_default()
-
       else:
         again = do_default()
 
     if not again: break
 
   inc(ms.matchdepth)
-  debug "ret " & $si
   return si
 
-
 proc get_one_capture(ms: ref MatchState, i, si, ei: int): string =
-  debug "get one $1 $2 si=$3" % [ $ms.level, $i, $si ]
   if i >= ms.level:
     if i == 0: # ms.level == 0, too
-      debug "whole '$1'' $2 $3" % [ ms.src, $si, $(ei-si) ]
       return ms.src.substr(si, ei-1) # add whole match
     else:
       raise newException(ValueError, "invalid capture index %" & $i)
@@ -353,13 +304,10 @@ proc get_one_capture(ms: ref MatchState, i, si, ei: int): string =
     elif cap.len == CAP_POSITION:
       return "POS"
     else:
-      debug "part $1 $2" % [$cap.start, $cap.len]
       return ms.src.substr(cap.start, cap.start+cap.len-1)
-
 
 proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
   let n = if (ms.level == 0 and si != -1): 1 else: ms.level
-  debug "level=$1 n=$2 si=$3" % [ $ms.level, $n, $si ]
   var cs = newSeq[string]()
   var i = 0
   while i < n:
@@ -368,12 +316,10 @@ proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
     inc(i)
   return cs
 
-
 proc match_aux(src: string, pat: string): seq[string] =
     
   var ms: ref MatchState
   new ms
-
   var si = 0
   var pi = 0
 
@@ -396,7 +342,6 @@ proc match_aux(src: string, pat: string): seq[string] =
     
     let res = match(ms, si, pi)
     if res != -1:
-      debug "found " & $ms.level & " " & $res & " " & $si
       return get_captures(ms, si, res)
     
     if not (si < ms.src_len and not anchor):
@@ -408,11 +353,7 @@ proc match_aux(src: string, pat: string): seq[string] =
 proc match(src: string, pat: string): string =
   let captures = match_aux(src, pat)
   if len(captures) > 0:
-    echo "'$1' '$2' => '$3'" % [ src, pat, $captures[0] ]
     return captures[0]
-  else:
-    echo "'$1' '$2' => nil" % [ src, pat, nil ]
-
 
 
 
@@ -470,13 +411,12 @@ proc unit_test() =
   test("", "a?", "")
   test("á", "á?", "á")
   test("ábl", "á?b?l?", "ábl")
-  test("  ábl", "á?b?l?", "")
   test("aa", "^aa?a?a", "aa")
-  test("]]]áb", "[^]]", "á")
   test("0alo alo", "%x*", "0a")
+  echo "All ok"
 
 
-#unit_test()
+unit_test()
 
 # vi: ft=nim et ts=2 sw=2
 
