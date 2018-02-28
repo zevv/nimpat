@@ -1,5 +1,4 @@
 
-
 import strutils
 
 const 
@@ -16,6 +15,8 @@ type
     len: int
     start: int
 
+  Captures = seq[ref Capture]
+
   MatchState = object
     matchdepth: int
     src: string
@@ -23,7 +24,12 @@ type
     pat: string
     pat_len: int
     level: int
-    caps: seq[ref Capture]
+    captures: Captures
+
+
+proc debug(s: string) =
+  if false:
+    echo s
 
 
 proc match(ms: ref MatchState; si2: int; pi2: int): int
@@ -74,8 +80,8 @@ proc match_class*(c: cchar, cl: cchar): bool =
 
 
 proc check_capture(ms: ref MatchState, cl: char): int =
-  let c = ord(cl) - ord('1')
-  if c < 0 or c >= ms.level or ms.caps[c].len == CAP_UNFINISHED:
+  let c = parseInt($cl) - 1
+  if c < 0 or c >= ms.level or ms.captures[c].len == CAP_UNFINISHED:
     raise newException(ValueError, "invalid capture index $1" % intToStr(c + 1))
   return c
 
@@ -83,7 +89,7 @@ proc check_capture(ms: ref MatchState, cl: char): int =
 proc capture_to_close(ms: ref MatchState): int =
   var level = ms.level - 1
   while level >= 0:
-    if ms.caps[level].len == CAP_UNFINISHED:
+    if ms.captures[level].len == CAP_UNFINISHED:
       return level
     dec(level)
   raise newException(ValueError, "invalid pattern capture")
@@ -171,13 +177,14 @@ proc min_expand (ms: ref MatchState, si2, pi, ep: int): int =
 
 
 proc start_capture (ms: ref MatchState, si, pi, what: int): int =
+  debug "  start $1" % $si
   let level = ms.level
   if level >= LUA_MAXCAPTURES:
     raise newException(ValueError, "too many captures")
   var cap = new Capture;
-  ms.caps.add(cap)
-  ms.caps[level].len = what;
-  ms.caps[level].start = si;
+  ms.captures.add(cap)
+  ms.captures[level].len = what;
+  ms.captures[level].start = si;
   ms.level = level+1
   let res = match(ms, si, pi)
   if res == -1: # match failed?
@@ -187,10 +194,11 @@ proc start_capture (ms: ref MatchState, si, pi, what: int): int =
 
 proc end_capture (ms: ref MatchState, si, pi: int): int = 
   let n = capture_to_close(ms)
-  ms.caps[n].len = si - ms.caps[n].start
+  var cap = ms.captures[n]
+  cap.len = si - ms.captures[n].start
   let res = match(ms, si, pi)
   if res == -1:
-    ms.caps[n].len = CAP_UNFINISHED
+    ms.captures[n].len = CAP_UNFINISHED
   return res
 
 
@@ -201,14 +209,15 @@ proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
       return -1
     elif s1[o1+i] > s2[o2+i]:
       return 1
+    inc(i)
   return 0
 
 
 proc match_capture (ms: ref MatchState, si: int, c: int): int =
   let n = check_capture(ms, cast[cchar](c));
-  let len = ms.caps[n].len;
+  let len = ms.captures[n].len;
   if ms.src_len-si >= len and
-      memcmp(ms.src, ms.caps[c].start, ms.src, si, len) == 0:
+      memcmp(ms.src, ms.captures[n].start, ms.src, si, len) == 0:
     return si+len
   else:
     return -1
@@ -230,9 +239,12 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
       else: #  '+' or no suffix
         si = -1 #  fail
     else: # matched once
+      debug "  def " & $cast[int](ms.pat[ep])
       case ms.pat[ep] # handle optional suffix
       of '?': # optional
+        debug "  question"
         let res = match(ms, si + 1, ep + 1)
+        debug "  s2 " & $res
         if res != -1:
           si = res
         else:
@@ -251,90 +263,117 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
         return true
     return false
 
-
   dec(ms.matchdepth)
   if ms.matchdepth == 0:
     raise newException(ValueError, "pattern too complex")
 
   while true:
   
+    debug "match $1 '$2' '$3'" % [ $si, ms.src.substr(si), ms.pat.substr(pi)]
+
     var again: bool
 
     if pi != ms.pat_len: # end of pattern?
 
+      debug "pat " & $ms.pat[pi]
+
       case ms.pat[pi]
 
-        of '(': # start capture
-          if ms.pat[pi + 1] == ')':
-            si = start_capture(ms, si, pi + 2, CAP_POSITION)
-          else:
-            si = start_capture(ms, si, pi + 1, CAP_UNFINISHED)
+      of '(': # start capture
+        if ms.pat[pi + 1] == ')':
+          si = start_capture(ms, si, pi + 2, CAP_POSITION)
+        else:
+          si = start_capture(ms, si, pi + 1, CAP_UNFINISHED)
 
-        of ')': # end capture
-          si = end_capture(ms, si, pi + 1)
+      of ')': # end capture
+        si = end_capture(ms, si, pi + 1)
 
-        of '$':
-          if (pi + 1) != ms.pat_len: # is the '$' the last char in pattern?
-            again = do_default()
+      of '$':
+        if (pi + 1) != ms.pat_len: # is the '$' the last char in pattern?
+          again = do_default()
+        else:
           si = if (si == ms.src_len): si else: -1 # check end of string
 
-        of L_ESC: # escaped sequences not in the format class[*+?-]?
+      of L_ESC: # escaped sequences not in the format class[*+?-]?
 
-          case ms.pat[pi + 1]
+        debug "pat2 " & $ms.pat[pi+1]
 
-            of 'b': # balanced string?
-              si = matchbalance(ms, si, pi + 2)
-              if si != -1:
-                inc(pi, 4)
-                again = true
+        case ms.pat[pi + 1]
 
-            of 'f': # frontier?
-              inc(pi, 2)
-              if ms.pat[pi] != '[':
-                raise newException(ValueError, "missing \'[\' after \'%%f\' in pattern")
-              let ep = classend(ms, pi) # points to what is next
-              let previous = if (si == ms.src_len): '\0' else: ms.src[si - 1]
-              if not matchbracketclass(ms, previous, pi, ep - 1) and
-                  matchbracketclass(ms, ms.src[si], pi, ep - 1):
-                pi = ep
-                again = true
-              si = -1
+        of 'b': # balanced string?
+          si = matchbalance(ms, si, pi + 2)
+          if si != -1:
+            inc(pi, 4)
+            again = true
 
-            of '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': # capture results (%0-%9)?
-              let rr = match_capture(ms, si, cast[int](ms.pat[pi + 1]))
-              if rr != -1:
-                inc(pi, 2)
-                again = true
-              else:
-                si = rr
+        of 'f': # frontier?
+          inc(pi, 2)
+          if ms.pat[pi] != '[':
+            raise newException(ValueError, "missing \'[\' after \'%%f\' in pattern")
+          let ep = classend(ms, pi) # points to what is next
+          let previous = if (si == ms.src_len): '\0' else: ms.src[si - 1]
+          if not matchbracketclass(ms, previous, pi, ep - 1) and
+              matchbracketclass(ms, ms.src[si], pi, ep - 1):
+            pi = ep
+            again = true
+          si = -1
 
-            else:
-              again = do_default()
+        of Digits: # capture results (%0-%9)?
+          si = match_capture(ms, si, cast[int](ms.pat[pi + 1]))
+          debug "  digit $1" % $si
+          if si != -1:
+            inc(pi, 2)
+            again = true
 
         else:
-
           again = do_default()
+
+      else:
+        again = do_default()
 
     if not again: break
 
   inc(ms.matchdepth)
+  debug "ret " & $si
   return si
 
 
-proc show(ms: ref MatchState) =
+proc get_one_capture(ms: ref MatchState, i, si, ei: int): string =
+  debug "get one $1 $2 si=$3" % [ $ms.level, $i, $si ]
+  if i >= ms.level:
+    if i == 0: # ms.level == 0, too
+      debug "whole '$1'' $2 $3" % [ ms.src, $si, $(ei-si) ]
+      return ms.src.substr(si, ei-1) # add whole match
+    else:
+      raise newException(ValueError, "invalid capture index %" & $i)
+  else:
+    let cap = ms.captures[i]
+    if cap.len == CAP_UNFINISHED:
+      raise newException(ValueError, "unfinished capture")
+    elif cap.len == CAP_POSITION:
+      return "POS"
+    else:
+      debug "part $1 $2" % [$cap.start, $cap.len]
+      return ms.src.substr(cap.start, cap.start+cap.len-1)
+
+
+proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
+  let n = if (ms.level == 0 and si != -1): 1 else: ms.level
+  debug "level=$1 n=$2 si=$3" % [ $ms.level, $n, $si ]
+  var cs = newSeq[string]()
   var i = 0
-  while i < ms.level:
-    let cap = ms.caps[i]
-    let buf = $(ms.src)
-    echo "$1: ($2) $3" % 
-      [ $i, $cap.start, buf.substr(cap.start, cap.start + cap.len - 1) ]
+  while i < n:
+    let c = get_one_capture(ms, i, si, ei)
+    cs.add(c)
     inc(i)
+  return cs
 
 
-proc match(src: string, pat: string): int =
+proc match_aux(src: string, pat: string): seq[string] =
     
   var ms: ref MatchState
   new ms
+
   var si = 0
   var pi = 0
 
@@ -348,7 +387,7 @@ proc match(src: string, pat: string): int =
   ms.src_len = src.len();
   ms.pat = pat;
   ms.pat_len = pat.len();
-  ms.caps = newSeq[ref Capture]()
+  ms.captures = newSeq[ref Capture]()
 
   while true:
 
@@ -357,9 +396,8 @@ proc match(src: string, pat: string): int =
     
     let res = match(ms, si, pi)
     if res != -1:
-      echo  "done"
-      show(ms)
-      return
+      debug "found " & $ms.level & " " & $res & " " & $si
+      return get_captures(ms, si, res)
     
     if not (si < ms.src_len and not anchor):
       break
@@ -367,10 +405,78 @@ proc match(src: string, pat: string): int =
     inc(si)
 
 
-var s = "apehaar1234nana"
-var p = "ap([^r]+).-([0-9])()(%d*)"
+proc match(src: string, pat: string): string =
+  let captures = match_aux(src, pat)
+  if len(captures) > 0:
+    echo "'$1' '$2' => '$3'" % [ src, pat, $captures[0] ]
+    return captures[0]
+  else:
+    echo "'$1' '$2' => nil" % [ src, pat, nil ]
 
-let a = s.match(p)
+
+
+
+proc unit_test() =
+
+  proc test(src, pat, res: string) = 
+    if src.match(pat) != res:
+      echo "fail ('$1', '$2') != '$3' " % [src, pat, res]
+
+  test("aaab", ".*b", "aaab")
+  test("aaa", ".*a", "aaa")
+  test("b", ".*b", "b")
+  test("aaab", ".+b", "aaab")
+  test("aaa", ".+a", "aaa")
+  test("b", ".+b",  nil)
+  test("aaab", ".?b", "ab")
+  test("aaa", ".?a", "aa")
+  test("b", ".?b", "b")
+  test("oo", "(.)%1", "o")
+  test("==========", "^([=]*)=$", "=========")
+  test("==========", "^([=]*)=%1$", nil)
+  test("alo xyzK", "(%w+)K", "xyz")
+  test("254 K", "(%d*)K", "")
+  test("alo ", "(%w*)$", "")
+  test("alo ", "(%w+)$", nil)
+  test("aloALO", "%l*", "alo")
+  test("aLo_ALO", "%a*", "aLo")
+  test("aaab", "a*", "aaa");
+  test("aaa", "^.*$", "aaa");
+  test("aaa", "b*", "");
+  test("aaa", "ab*a", "aa")
+  test("aba", "ab*a", "aba")
+  test("aaab", "a+", "aaa")
+  test("aaa", "^.+$", "aaa")
+  test("aaa", "b+", nil)
+  test("aaa", "ab+a", nil)
+  test("aba", "ab+a", "aba")
+  test("a$a", ".$", "a")
+  test("a$a", ".%$", "a$")
+  test("a$a", ".$.", "a$a")
+  test("a$a", "$$", nil)
+  test("a$b", "a$", nil)
+  test("a$a", "$", "")
+  test("", "b*", "")
+  test("aaa", "bb*", nil)
+  test("aaab", "a-", "")
+  test("aaa", "^.-$", "aaa")
+  test("aabaaabaaabaaaba", "b.*b", "baaabaaabaaab")
+  test("aabaaabaaabaaaba", "b.-b", "baaab")
+  test("alo xo", ".o$", "xo")
+  test(" \n isto é assim", "%S%S*", "isto")
+  test(" \n isto é assim", "%S*$", "assim")
+  test(" \n isto é assim", "[a-z]*$", "assim")
+  test("um caracter ? extra", "[^%sa-z]", "?")
+  test("", "a?", "")
+  test("á", "á?", "á")
+  test("ábl", "á?b?l?", "ábl")
+  test("  ábl", "á?b?l?", "")
+  test("aa", "^aa?a?a", "aa")
+  test("]]]áb", "[^]]", "á")
+  test("0alo alo", "%x*", "0a")
+
+
+#unit_test()
 
 # vi: ft=nim et ts=2 sw=2
 
