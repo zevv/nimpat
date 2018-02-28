@@ -1,4 +1,13 @@
 
+
+This is a pure Nim port of the pattern matching code from Lua 5.3, and still a
+work in progress.
+
+
+
+
+The chapter 'patterns' from the Lua manual:
+
 Patterns are described by regular strings, which are interpreted as
 patterns by the pattern-matching functions string.find, string.gmatch,
 string.gsub, and string.match. This section describes the syntax and the
