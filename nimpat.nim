@@ -22,9 +22,7 @@ type
   MatchState = object
     matchdepth: int
     src: string
-    src_len: int
     pat: string
-    pat_len: int
     level: int
     captures: seq[ref Capture]
 
@@ -36,18 +34,18 @@ proc classend (ms: ref MatchState, pi2: int): int =
   inc(pi)
   case c
     of L_ESC:
-      if pi == ms.pat_len:
+      if pi == ms.pat.len():
         raise newException(ValueError, "malformed pattern (ends with '%')");
       return pi+1
     of '[':
       if ms.pat[pi] == '^':
         inc(pi)
       while true:
-        if pi == ms.pat_len:
+        if pi == ms.pat.len():
           raise newException(ValueError, "malformed pattern (missing ']')")
         let c = ms.pat[pi]
         inc(pi)
-        if c == L_ESC and pi < ms.pat_len:
+        if c == L_ESC and pi < ms.pat.len():
           inc(pi)  # skip escapes (e.g. '%]')
         if ms.pat[pi] == ']':
           break
@@ -109,7 +107,7 @@ proc matchbracketclass(ms: ref MatchState, c: char, pi2: int, ec: int): bool =
   return not sig;
 
 proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
-  if si >= ms.src_len:
+  if si >= ms.src.len():
     return false
   else:
     let c = ms.src[si];
@@ -121,7 +119,7 @@ proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
 
 proc matchbalance (ms: ref MatchState, si2, pi: int): int = 
   var si = si2
-  if pi >= ms.pat_len - 1:
+  if pi >= ms.pat.len() - 1:
     raise newException(ValueError, "malformed pattern (missing arguments to '%%b')")
   if ms.src[si] != ms.pat[pi]:
     return -1;
@@ -130,7 +128,7 @@ proc matchbalance (ms: ref MatchState, si2, pi: int): int =
     let e = ms.pat[pi+1];
     var cont = 1;
     inc(si)
-    while si < ms.src_len:
+    while si < ms.src.len():
       if ms.src[si] == e:
         dec(cont)
         if cont == 0:
@@ -196,7 +194,7 @@ proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
 proc match_capture (ms: ref MatchState, si: int, c: int): int =
   let n = check_capture(ms, cast[cchar](c));
   let len = ms.captures[n].len;
-  if ms.src_len-si >= len and
+  if ms.src.len()-si >= len and
       memcmp(ms.src, ms.captures[n].start, ms.src, si, len) == 0:
     return si+len
   else:
@@ -246,7 +244,7 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
   while true:
     var again: bool
 
-    if pi != ms.pat_len: # end of pattern?
+    if pi != ms.pat.len(): # end of pattern?
 
       case ms.pat[pi]
       of '(': # start capture
@@ -258,10 +256,10 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
       of ')': # end capture
         si = end_capture(ms, si, pi + 1)
       of '$':
-        if (pi + 1) != ms.pat_len: # is the '$' the last char in pattern?
+        if (pi + 1) != ms.pat.len(): # is the '$' the last char in pattern?
           again = do_default()
         else:
-          si = if (si == ms.src_len): si else: -1 # check end of string
+          si = if (si == ms.src.len()): si else: -1 # check end of string
       of L_ESC: # escaped sequences not in the format class[*+?-]?
         case ms.pat[pi + 1]
         of 'b': # balanced string?
@@ -274,7 +272,7 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
           if ms.pat[pi] != '[':
             raise newException(ValueError, "missing \'[\' after \'%%f\' in pattern")
           let ep = classend(ms, pi) # points to what is next
-          let previous = if (si == ms.src_len): '\0' else: ms.src[si - 1]
+          let previous = if (si == ms.src.len()): '\0' else: ms.src[si - 1]
           if not matchbracketclass(ms, previous, pi, ep - 1) and
               matchbracketclass(ms, ms.src[si], pi, ep - 1):
             pi = ep
@@ -332,9 +330,7 @@ proc match(src: string, pat: string): seq[string] =
   
   ms.matchdepth = MAXCCALLS;
   ms.src = src;
-  ms.src_len = src.len();
   ms.pat = pat;
-  ms.pat_len = pat.len();
   ms.captures = newSeq[ref Capture]()
 
   while true:
@@ -343,10 +339,9 @@ proc match(src: string, pat: string): seq[string] =
     let res = match(ms, si, pi)
     if res != -1:
       return get_captures(ms, si, res)
-    if not (si < ms.src_len and not anchor):
+    if not (si < ms.src.len() and not anchor):
       break
     inc(si)
-
 
 
 proc unit_test() =
@@ -419,7 +414,6 @@ proc unit_test() =
   test("ábl", "á?b?l?", @["ábl"])
   test("aa", "^aa?a?a", @["aa"])
   test("0alo alo", "%x*", @["0a"])
-  echo "Done"
 
 
 unit_test()
