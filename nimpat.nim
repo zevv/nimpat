@@ -322,7 +322,8 @@ proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
 
 proc match(src: string, pat: string): seq[string] =
     
-  var ms: MatchState
+  var ms: ref MatchState
+  new ms
   var si = 0
   var pi = 0
 
