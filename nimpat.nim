@@ -28,9 +28,9 @@ type
     level: int
     captures: seq[ref Capture]
 
-proc match(ms: ref MatchState; si2: int; pi2: int): int
+proc match(ms: var MatchState; si2: int; pi2: int): int
 
-proc classend (ms: ref MatchState, pi2: int): int =
+proc classend (ms: var MatchState, pi2: int): int =
   var pi = pi2
   let c = ms.pat[pi]
   inc(pi)
@@ -72,13 +72,13 @@ proc match_class*(c: cchar, cl: cchar): bool =
     else: return (cl == c)
   return if isLowerAscii(cl): res else: not res
 
-proc check_capture(ms: ref MatchState, cl: char): int =
+proc check_capture(ms: var MatchState, cl: char): int =
   let c = parseInt($cl) - 1
   if c < 0 or c >= ms.level or ms.captures[c].len == CAP_UNFINISHED:
     raise newException(ValueError, "invalid capture index $1" % intToStr(c + 1))
   return c
 
-proc capture_to_close(ms: ref MatchState): int =
+proc capture_to_close(ms: var MatchState): int =
   var level = ms.level - 1
   while level >= 0:
     if ms.captures[level].len == CAP_UNFINISHED:
@@ -86,7 +86,7 @@ proc capture_to_close(ms: ref MatchState): int =
     dec(level)
   raise newException(ValueError, "invalid pattern capture")
 
-proc matchbracketclass(ms: ref MatchState, c: char, pi2: int, ec: int): bool =
+proc matchbracketclass(ms: var MatchState, c: char, pi2: int, ec: int): bool =
   var sig = true
   var pi = pi2
   if ms.pat[pi+1] == '^':
@@ -108,7 +108,7 @@ proc matchbracketclass(ms: ref MatchState, c: char, pi2: int, ec: int): bool =
   
   return not sig;
 
-proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
+proc singlematch (ms: var MatchState, si, pi, ep: int): bool =
   if si >= ms.src_len:
     return false
   else:
@@ -119,7 +119,7 @@ proc singlematch (ms: ref MatchState, si, pi, ep: int): bool =
       of '[': return matchbracketclass(ms, c, pi, ep-1)
       else: return ms.pat[pi] == c
 
-proc matchbalance (ms: ref MatchState, si2, pi: int): int = 
+proc matchbalance (ms: var MatchState, si2, pi: int): int = 
   var si = si2
   if pi >= ms.pat_len - 1:
     raise newException(ValueError, "malformed pattern (missing arguments to '%%b')")
@@ -140,7 +140,7 @@ proc matchbalance (ms: ref MatchState, si2, pi: int): int =
       inc(si)
   return -1
 
-proc max_expand (ms: ref MatchState, si, pi, ep: int): int = 
+proc max_expand (ms: var MatchState, si, pi, ep: int): int = 
   var i = 0
   while singlematch(ms, si + i, pi, ep):
     inc(i)
@@ -151,7 +151,7 @@ proc max_expand (ms: ref MatchState, si, pi, ep: int): int =
     dec(i)  # else didn't match; reduce 1 repetition to try again
   return -1
 
-proc min_expand (ms: ref MatchState, si2, pi, ep: int): int =
+proc min_expand (ms: var MatchState, si2, pi, ep: int): int =
   var si = si2
   while true:
     let res = match(ms, si, ep+1)
@@ -162,7 +162,7 @@ proc min_expand (ms: ref MatchState, si2, pi, ep: int): int =
     else:
       return -1
 
-proc start_capture (ms: ref MatchState, si, pi, what: int): int =
+proc start_capture (ms: var MatchState, si, pi, what: int): int =
   let level = ms.level
   var cap = new Capture;
   ms.captures.add(cap)
@@ -174,7 +174,7 @@ proc start_capture (ms: ref MatchState, si, pi, what: int): int =
     dec(ms.level) # undo capture
   return res
 
-proc end_capture (ms: ref MatchState, si, pi: int): int = 
+proc end_capture (ms: var MatchState, si, pi: int): int = 
   let n = capture_to_close(ms)
   var cap = ms.captures[n]
   cap.len = si - ms.captures[n].start
@@ -193,7 +193,7 @@ proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
     inc(i)
   return 0
 
-proc match_capture (ms: ref MatchState, si: int, c: int): int =
+proc match_capture (ms: var MatchState, si: int, c: int): int =
   let n = check_capture(ms, cast[cchar](c));
   let len = ms.captures[n].len;
   if ms.src_len-si >= len and
@@ -202,7 +202,7 @@ proc match_capture (ms: ref MatchState, si: int, c: int): int =
   else:
     return -1
 
-proc match(ms: ref MatchState; si2: int; pi2: int): int =
+proc match(ms: var MatchState; si2: int; pi2: int): int =
   var si: int = si2
   var pi: int = pi2
   assert si >= 0
@@ -295,7 +295,7 @@ proc match(ms: ref MatchState; si2: int; pi2: int): int =
   inc(ms.matchdepth)
   return si
 
-proc get_one_capture(ms: ref MatchState, i, si, ei: int): string =
+proc get_one_capture(ms: var MatchState, i, si, ei: int): string =
   if i >= ms.level:
     if i == 0: # ms.level == 0, too
       return ms.src.substr(si, ei-1) # add whole match
@@ -310,7 +310,7 @@ proc get_one_capture(ms: ref MatchState, i, si, ei: int): string =
     else:
       return ms.src.substr(cap.start, cap.start+cap.len-1)
 
-proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
+proc get_captures(ms: var MatchState, si: int, ei: int): seq[string] =
   let n = if (ms.level == 0 and si != -1): 1 else: ms.level
   var cs = newSeq[string]()
   var i = 0
@@ -322,8 +322,7 @@ proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
 
 proc match(src: string, pat: string): seq[string] =
     
-  var ms: ref MatchState
-  new ms
+  var ms: MatchState
   var si = 0
   var pi = 0
 
