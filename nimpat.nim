@@ -6,6 +6,7 @@
 #
 
 import strutils
+import macros
 
 const 
   CAP_UNFINISHED = -1
@@ -182,13 +183,11 @@ proc end_capture (ms: ref MatchState, si, pi: int): int =
   return res
 
 proc memcmp(s1: string, o1: int, s2: string, o2: int, len: csize): int =
-  var i = 0
-  while i < len:
+  for i in 0..len-1:
     if s1[o1+i] < s2[o2+i]:
       return -1
     elif s1[o1+i] > s2[o2+i]:
       return 1
-    inc(i)
   return 0
 
 proc match_capture (ms: ref MatchState, si: int, c: int): int =
@@ -304,18 +303,16 @@ proc get_one_capture(ms: ref MatchState, i, si, ei: int): string =
     if cap.len == CAP_UNFINISHED:
       raise newException(ValueError, "unfinished capture")
     elif cap.len == CAP_POSITION:
-      return "POS"
+      return $cap.start
     else:
       return ms.src.substr(cap.start, cap.start+cap.len-1)
 
 proc get_captures(ms: ref MatchState, si: int, ei: int): seq[string] =
   let n = if (ms.level == 0 and si != -1): 1 else: ms.level
   var cs = newSeq[string]()
-  var i = 0
-  while i < n:
+  for i in 0..n-1:
     let c = get_one_capture(ms, i, si, ei)
     cs.add(c)
-    inc(i)
   return cs
 
 proc match(src: string, pat: string): seq[string] =
@@ -344,21 +341,85 @@ proc match(src: string, pat: string): seq[string] =
     inc(si)
 
 
+proc match1(src: string, pat:string): (string) =
+  let caps = match(src, pat)
+  return (caps[0])
+
+proc match2(src: string, pat:string): (string, string) =
+  let caps = match(src, pat)
+  return (caps[0], caps[1])
+
+proc match3(src: string, pat:string): (string, string, string) =
+  let caps = match(src, pat)
+  return (caps[0], caps[1], caps[2])
+
+proc match4(src: string, pat:string): (string, string, string, string) =
+  let caps = match(src, pat)
+  return (caps[0], caps[1], caps[2], caps[3])
+
+iterator match1(src: string, pat:string): (string) =
+  let caps = match(src, pat)
+  yield (caps[0])
+
+iterator match2(src: string, pat:string): (string, string) =
+  let caps = match(src, pat)
+  yield (caps[0], caps[1])
+
+iterator match3(src: string, pat:string): (string, string, string) =
+  let caps = match(src, pat)
+  yield (caps[0], caps[1], caps[2])
+
+iterator match4(src: string, pat:string): (string, string, string, string) =
+  let caps = match(src, pat)
+  yield (caps[0], caps[1], caps[2], caps[3])
+
+
+
+proc match(src: string, pat: string, c0: var string): bool = 
+  let caps = src.match(pat)
+  if caps.len == 1:
+    c0 = caps[0]
+    return true
+
+proc match(src: string, pat: string, c0, c1: var string): bool = 
+  let caps = src.match(pat)
+  if caps.len == 2:
+    c0 = caps[0]
+    c1 = caps[1]
+    return true
+
+proc match(src: string, pat: string, c0, c1, c2: var string): bool = 
+  let caps = src.match(pat)
+  if caps.len == 3:
+    c0 = caps[0]
+    c1 = caps[1]
+    c2 = caps[1]
+    return true
+
+
+let src = "3 foxes: 0x1234"
+
+let (a, b, c) = src.match3("(%d+) ([^:]+): 0x(%x+)")
+echo "AAA $1 $2 $3" % [a, b, c]
+
+for a, b, c in src.match3("(%d+) ([^:]+): 0x(%x+)"):
+  echo "BBB $1 $2 $3" % [a, b, c]
+
+
 proc unit_test() =
 
   proc test(src, pat: string, exp: seq[string]) = 
     let res = src.match(pat)
     var ok = true
     if res.len == exp.len:
-      var i = 0
-      while i < exp.len:
+      for i in 0..exp.len-1:
         if res[i] != exp[i]:
           ok = false
-        inc(i)
     else:
       ok = false
     if not ok:
-      echo "fail ('$1', '$2') != '$3' " % [src, pat, repr(res)]
+      echo "fail ('$1', '$2') != '$3' but '$4' " % [src, pat, $exp, $res]
+      assert(false)
 
   test("123456", "(%d%d)(%d%d)", @["12", "34"])
   test("123456", ".(%d%d)(%d%d)", @["23", "45"])
@@ -414,6 +475,8 @@ proc unit_test() =
   test("ábl", "á?b?l?", @["ábl"])
   test("aa", "^aa?a?a", @["aa"])
   test("0alo alo", "%x*", @["0a"])
+  test("abcdefg", "d()e", @["4"])
+  echo "Done"
 
 
 unit_test()

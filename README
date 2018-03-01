@@ -5,16 +5,17 @@ work in progress.
 
 
 
-
 The chapter 'patterns' from the Lua manual:
 
-Patterns are described by regular strings, which are interpreted as
-patterns by the pattern-matching functions string.find, string.gmatch,
-string.gsub, and string.match. This section describes the syntax and the
-meaning (that is, what they match) of these strings.  Character Class:
+  Patterns are described by regular strings, which are interpreted as
+  patterns by the pattern-matching functions string.find, string.gmatch,
+  string.gsub, and string.match. This section describes the syntax and the
+  meaning (that is, what they match) of these strings.
 
-A character class is used to represent a set of characters. The following
-combinations are allowed in describing a character class:
+Character Class:
+
+  A character class is used to represent a set of characters. The following
+  combinations are allowed in describing a character class:
 
     -  x: (where x is not one of the magic characters ^$()%.[]*+-?) represents the
           character x itself.
@@ -30,18 +31,18 @@ combinations are allowed in describing a character class:
     - %w: represents all alphanumeric characters.
     - %x: represents all hexadecimal digits.
     - %x: (where x is any non-alphanumeric character) represents the character x.
-          This is the standard way to escape the magic characters. Any
-          non-alphanumeric character (including all punctuation characters, even the
-          non-magical) can be preceded by a '%' when used to represent itself in a
-          pattern.
+	  This is the standard way to escape the magic characters. Any
+	  non-alphanumeric character (including all punctuation characters,
+	  even the non-magical) can be preceded by a '%' when used to represent
+	  itself in a pattern.
     - [set]: represents the class which is the union of all characters in set.
-          A range of characters can be specified by separating the end characters
-          of the range, in ascending order, with a '-'. All classes %x
-          described above can also be used as components in set. All other
-          characters in set represent themselves. For example, [%w_] (or
-          [_%w]) represents all alphanumeric characters plus the underscore,
-          [0-7] represents the octal digits, and [0-7%l%-] represents the
-          octal digits plus the lowercase letters plus the '-' character.
+	  A range of characters can be specified by separating the end
+	  characters of the range, in ascending order, with a '-'. All classes
+	  %x described above can also be used as components in set. All other
+	  characters in set represent themselves. For example, [%w_] (or [_%w])
+	  represents all alphanumeric characters plus the underscore, [0-7]
+	  represents the octal digits, and [0-7%l%-] represents the octal
+	  digits plus the lowercase letters plus the '-' character.
 
     You can put a closing square bracket in a set by positioning it as the
     first character in the set. You can put an hyphen in a set by positioning
@@ -52,15 +53,16 @@ combinations are allowed in describing a character class:
     patterns like [%a-z] or [a-%%] have no meaning.  [^set]: represents the
     complement of set, where set is interpreted as above.
 
-For all classes represented by single letters (%a, %c, etc.), the corresponding
-uppercase letter represents the complement of the class. For instance, %S
-represents all non-space characters.
+  For all classes represented by single letters (%a, %c, etc.), the corresponding
+  uppercase letter represents the complement of the class. For instance, %S
+  represents all non-space characters.
+  
+  The definitions of letter, space, and other character groups depend on the
+  current locale. In particular, the class [a-z] may not be equivalent to %l.
 
-The definitions of letter, space, and other character groups depend on the
-current locale. In particular, the class [a-z] may not be equivalent to %l.
 Pattern Item:
 
-A pattern item can be
+  A pattern item can be
 
     - a single character class, which matches any single character in the class;
     - a single character class followed by '*', which matches zero or more
@@ -91,20 +93,21 @@ A pattern item can be
 
 Pattern:
 
-A pattern is a sequence of pattern items. A caret '^' at the beginning of a
-pattern anchors the match at the beginning of the subject string. A '$' at the
-end of a pattern anchors the match at the end of the subject string. At other
-positions, '^' and '$' have no special meaning and represent themselves.
+  A pattern is a sequence of pattern items. A caret '^' at the beginning of a
+  pattern anchors the match at the beginning of the subject string. A '$' at the
+  end of a pattern anchors the match at the end of the subject string. At other
+  positions, '^' and '$' have no special meaning and represent themselves.
+
 Captures:
 
-A pattern can contain sub-patterns enclosed in parentheses; they describe
-captures. When a match succeeds, the substrings of the subject string that
-match captures are stored (captured) for future use. Captures are numbered
-according to their left parentheses. For instance, in the pattern
-"(a*(.)%w(%s*))", the part of the string matching "a*(.)%w(%s*)" is stored as
-the first capture (and therefore has number 1); the character matching "." is
-captured with number 2, and the part matching "%s*" has number 3.
-
-As a special case, the empty capture () captures the current string position (a
-number). For instance, if we apply the pattern "()aa()" on the string "flaaap",
-there will be two captures: 3 and 5.
+  A pattern can contain sub-patterns enclosed in parentheses; they describe
+  captures. When a match succeeds, the substrings of the subject string that
+  match captures are stored (captured) for future use. Captures are numbered
+  according to their left parentheses. For instance, in the pattern
+  "(a*(.)%w(%s*))", the part of the string matching "a*(.)%w(%s*)" is stored as
+  the first capture (and therefore has number 1); the character matching "." is
+  captured with number 2, and the part matching "%s*" has number 3.
+  
+  As a special case, the empty capture () captures the current string position (a
+  number). For instance, if we apply the pattern "()aa()" on the string "flaaap",
+  there will be two captures: 3 and 5.
